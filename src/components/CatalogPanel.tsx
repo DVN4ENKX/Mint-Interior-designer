@@ -1,16 +1,14 @@
 import { useState } from 'react'
-import type { CatalogItem } from '../types'
+import { CATALOG } from '../data/catalog'
+import { usePlanStore } from '../store'
 
-type Props = {
-  catalog: CatalogItem[]
-  onAdd: (item: CatalogItem) => void
-}
+export default function CatalogPanel() {
+  const addToRoom = usePlanStore((s) => s.addToRoom)
 
-export default function CatalogPanel({ catalog, onAdd }: Props) {
-  // Поиск — локальное состояние: оно не интересует никого, кроме каталога
+  // поиск — локальное состояние, в store ему делать нечего
   const [query, setQuery] = useState('')
 
-  const visible = catalog.filter((item) =>
+  const visible = CATALOG.filter((item) =>
     item.name.toLowerCase().includes(query.trim().toLowerCase()),
   )
 
@@ -27,8 +25,10 @@ export default function CatalogPanel({ catalog, onAdd }: Props) {
       {visible.map((item) => (
         <div key={item.id} className="card">
           <div className="name">{item.name}</div>
-          <div className="meta">{item.size.map((s) => s.toFixed(1)).join(' × ')} м</div>
-          <button onClick={() => onAdd(item)}>В комнату</button>
+          <div className="meta">
+            {item.size.map((s) => s.toFixed(1)).join(' × ')} м
+          </div>
+          <button onClick={() => addToRoom(item)}>В комнату</button>
         </div>
       ))}
     </aside>
