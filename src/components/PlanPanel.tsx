@@ -153,9 +153,13 @@ export default function PlanPanel() {
             accept="image/*"
             style={{ display: 'none' }}
             onChange={(e) => {
-              const f = e.target.files?.[0]
-              if (f) setUnderlay(URL.createObjectURL(f))
-            }}
+  const f = e.target.files?.[0]
+  if (!f) return
+  const reader = new FileReader()
+  reader.onload = () => setUnderlay(String(reader.result))
+  reader.readAsDataURL(f)
+  e.target.value = ''
+}}
           />
         </label>
         <span className="hint">{HINTS[tool]}</span>

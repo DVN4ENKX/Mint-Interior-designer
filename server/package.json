@@ -1,0 +1,12 @@
+{
+  "name": "room-planner-server",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "node --watch index.js" },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.0"
+  }
+}

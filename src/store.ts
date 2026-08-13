@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { temporal } from 'zundo'
+import * as THREE from 'three'
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import type { CatalogItem, PlacedItem, Point, Tool, Underlay, Wall } from './types'
 
 const wallsCenter = (walls: Wall[]): [number, number] => {
@@ -13,34 +15,58 @@ const wallsCenter = (walls: Wall[]): [number, number] => {
   return [(minX + maxX) / 2, (minY + maxY) / 2]
 }
 
-type PlanState = {
+const r2 = (v: number) => Math.max(0.05, Math.round(v * 100) / 100)
+
+export type Persisted = {
+  walls: Wall[]
   placed: PlacedItem[]
+  underlay: Underlay | null
+}
+
+const LS_KEY = 'room-planner:v1'
+
+function loadPersisted(): Persisted {
+  try {
+    const raw = localStorage.getItem(LS_KEY)
+    if (raw) {
+      const p = JSON.parse(raw)
+      return { walls: p.walls ?? [], placed: p.placed ?? [], underlay: p.underlay ?? null }
+    }
+  } catch {
+    /* повреждённые данные — начинаем с чистого листа */
+  }
+  return { walls: [], placed: [], underlay: null }
+}
+
+type PlanState = Persisted & {
   addToRoom: (item: CatalogItem) => void
   removeFromRoom: (uid: string) => void
   clearRoom: () => void
   moveItem: (uid: string, pos: [number, number]) => void
   rotateItem: (uid: string) => void
+  hydrate: (p: Persisted) => void
+  exportJson: () => void
+  importJson: (file: File) => Promise<void>
+
+  customCatalog: CatalogItem[]
+  uploadModel: (file: File) => Promise<void>
 
   tool: Tool
   setTool: (t: Tool) => void
-
-  walls: Wall[]
   addWall: (a: Point, b: Point) => void
   updateWallEnd: (id: string, end: 'a' | 'b', p: Point) => void
   removeWall: (id: string) => void
-
   selectedWallId: string | null
   selectWall: (id: string | null) => void
-
-  underlay: Underlay | null
   setUnderlay: (url: string) => void
   calibrateUnderlay: (metersPerPx: number) => void
 }
 
 export const usePlanStore = create<PlanState>()(
   temporal(
-    (set) => ({
-      placed: [],
+    (set, get) => ({
+      ...loadPersisted(),
+
       addToRoom: (item) =>
         set((s) => {
           const [cx, cy] = wallsCenter(s.walls)
@@ -71,6 +97,54 @@ export const usePlanStore = create<PlanState>()(
           ),
         })),
 
+      hydrate: (p) =>
+        set({ walls: p.walls, placed: p.placed, underlay: p.underlay, selectedWallId: null }),
+
+      exportJson: () => {
+        const { walls, placed, underlay } = get()
+        const blob = new Blob([JSON.stringify({ walls, placed, underlay }, null, 2)], {
+          type: 'application/json',
+        })
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(blob)
+        a.download = 'room-plan.json'
+        a.click()
+        URL.revokeObjectURL(a.href)
+      },
+
+      importJson: async (file) => {
+        try {
+          const p = JSON.parse(await file.text())
+          get().hydrate({
+            walls: p.walls ?? [],
+            placed: p.placed ?? [],
+            underlay: p.underlay ?? null,
+          })
+        } catch {
+          alert('Это не похоже на JSON проекта')
+        }
+      },
+
+      customCatalog: [],
+      uploadModel: async (file) => {
+        try {
+          const url = URL.createObjectURL(file)
+          const gltf = await new GLTFLoader().loadAsync(url)
+          const v = new THREE.Box3().setFromObject(gltf.scene).getSize(new THREE.Vector3())
+          const item: CatalogItem = {
+            id: 'custom-' + crypto.randomUUID(),
+            name: file.name.replace(/\.(glb|gltf)$/i, ''),
+            price: 0,
+            size: [r2(v.x), r2(v.y), r2(v.z)],
+            modelUrl: url,
+          }
+          set((s) => ({ customCatalog: [...s.customCatalog, item] }))
+          get().addToRoom(item)
+        } catch {
+          alert('Не удалось прочитать файл модели. Нужен .glb или .gltf.')
+        }
+      },
+
       tool: 'Выбор',
       setTool: (tool) => set({ tool, selectedWallId: null }),
 
@@ -100,3 +174,19 @@ export const usePlanStore = create<PlanState>()(
     },
   ),
 )
+
+// автосохранение: каждое изменение, но не чаще раза в 500 мс
+let saveTimer: number | undefined
+usePlanStore.subscribe((state) => {
+  window.clearTimeout(saveTimer)
+  saveTimer = window.setTimeout(() => {
+    try {
+      localStorage.setItem(
+        LS_KEY,
+        JSON.stringify({ walls: state.walls, placed: state.placed, underlay: state.underlay }),
+      )
+    } catch {
+      console.warn('Не удалось сохранить проект (кваота localStorage)')
+    }
+  }, 500)
+})

@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Component, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import type { PropsWithChildren, ReactNode } from 'react'
 import { Canvas } from '@react-three/fiber'
-import { OrbitControls, Grid } from '@react-three/drei'
+import { OrbitControls, Grid, useGLTF } from '@react-three/drei'
+import * as THREE from 'three'
 import { usePlanStore } from '../store'
 import type { PlacedItem, Wall } from '../types'
 
-const H = 2.7  // высота потолка
-const T = 0.12 // толщина стен
+const H = 2.7
+const T = 0.12
 const snap = (v: number) => Math.round(v * 10) / 10
 
 function bbox(walls: Wall[]) {
@@ -23,6 +25,55 @@ const colorFor = (id: string) => {
   let h = 0
   for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) % 360
   return `hsl(${h}, 45%, 62%)`
+}
+
+// если модель упала с ошибкой — показываем бокс, не роняя всю сцену
+class ModelErrorBoundary extends Component<
+  PropsWithChildren<{ fallback: ReactNode }>,
+  { failed: boolean }
+> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children
+  }
+}
+
+function ModelBody({ url, target }: { url: string; target: [number, number, number] }) {
+  const { scene } = useGLTF(url, true) // true — поддержка Draco-сжатия
+  const { model, size, center, minY } = useMemo(() => {
+    const m = scene.clone(true)
+    m.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) {
+        o.castShadow = true
+        o.receiveShadow = true
+      }
+    })
+    const box = new THREE.Box3().setFromObject(m)
+    return {
+      model: m,
+      size: box.getSize(new THREE.Vector3()),
+      center: box.getCenter(new THREE.Vector3()),
+      minY: box.min.y,
+    }
+  }, [scene])
+
+  const scale: [number, number, number] = [
+    target[0] / Math.max(size.x, 0.001),
+    target[1] / Math.max(size.y, 0.001),
+    target[2] / Math.max(size.z, 0.001),
+  ]
+
+  return (
+    <group scale={scale}>
+      {/* центрируем и опускаем на пол в локальных координатах модели */}
+      <group position={[-center.x, -minY, -center.z]}>
+        <primitive object={model} />
+      </group>
+    </group>
+  )
 }
 
 function WallMesh({ wall }: { wall: Wall }) {
@@ -50,11 +101,18 @@ function ItemMesh({
   const rotateItem = usePlanStore((s) => s.rotateItem)
   const [w, h, d] = item.item.size
   const [x, z] = override ?? item.pos
+
+  const box = (
+    <mesh castShadow>
+      <boxGeometry args={[w, h, d]} />
+      <meshStandardMaterial color={colorFor(item.item.id)} />
+    </mesh>
+  )
+
   return (
-    <mesh
-      position={[x, h / 2, z]}
+    <group
+      position={[x, item.item.modelUrl ? 0 : h / 2, z]}
       rotation-y={item.rotY}
-      castShadow
       onPointerDown={(e) => {
         e.stopPropagation()
         onStartDrag(item.uid, item.pos)
@@ -62,9 +120,16 @@ function ItemMesh({
       }}
       onDoubleClick={() => rotateItem(item.uid)}
     >
-      <boxGeometry args={[w, h, d]} />
-      <meshStandardMaterial color={colorFor(item.item.id)} />
-    </mesh>
+      {item.item.modelUrl ? (
+        <ModelErrorBoundary fallback={box}>
+          <Suspense fallback={box}>
+            <ModelBody url={item.item.modelUrl} target={[w, h, d]} />
+          </Suspense>
+        </ModelErrorBoundary>
+      ) : (
+        box
+      )}
+    </group>
   )
 }
 
@@ -73,7 +138,6 @@ function Scene() {
   const placed = usePlanStore((s) => s.placed)
   const moveItem = usePlanStore((s) => s.moveItem)
 
-  // «живая» позиция во время перетаскивания — в store попадёт только commit
   const [drag, setDrag] = useState<{ uid: string; pos: [number, number] } | null>(null)
   const dragRef = useRef(drag)
   dragRef.current = drag
@@ -82,7 +146,7 @@ function Scene() {
     const up = () => {
       const d = dragRef.current
       if (d) {
-        moveItem(d.uid, d.pos) // ровно ОДНА запись в истории undo на весь drag
+        moveItem(d.uid, d.pos)
         setDrag(null)
         document.body.style.cursor = ''
       }
@@ -112,7 +176,6 @@ function Scene() {
         shadow-camera-bottom={-15}
       />
 
-      {/* пол: он же «ловит» мышь во время перетаскивания */}
       <mesh
         rotation-x={-Math.PI / 2}
         position={[cx, 0, cz]}
@@ -156,7 +219,7 @@ export default function ViewportPanel() {
   const total = placed.reduce((sum, p) => sum + p.item.price, 0)
   return (
     <section className="panel viewport">
-      <Canvas shadows camera={{ position: [8, 7, 10], fov: 50 }}>
+      <Canvas shadows gl={{ preserveDrawingBuffer: true }} camera={{ position: [8, 7, 10], fov: 50 }}>
         <Scene />
       </Canvas>
       <div className="hud">

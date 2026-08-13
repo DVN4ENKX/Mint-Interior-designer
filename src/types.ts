@@ -3,12 +3,13 @@ export type CatalogItem = {
   name: string
   price: number
   size: [number, number, number]
+  modelUrl?: string // если есть — грузим GLB, если нет — цветной бокс
 }
 
 export type PlacedItem = {
   uid: string
   item: CatalogItem
-  pos: [number, number] // x и z в метрах, общие для 2D и 3D
+  pos: [number, number]
   rotY: number
 }
 
