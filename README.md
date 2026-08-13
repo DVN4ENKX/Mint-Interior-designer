@@ -1,32 +1,158 @@
-# React + TypeScript + Vite
+# 🏠 Room Planner — 3D-планировщик квартиры
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Веб-приложение для ремонта и расстановки мебели: нарисуйте планировку в 2D (или обведите загруженное фото плана), откалибруйте масштаб по известному размеру — и сразу получите 3D-комнату, в которой можно расставлять мебель из каталога или свои собственные `.glb`-модели.
 
-Currently, two official plugins are available:
+**Архитектурный принцип:** один store — две проекции. 2D-холст (Konva) и 3D-сцена (React Three Fiber) рендерят одни и те же данные в метрах, поэтому всё, что нарисовано в 2D, мгновенно и точно появляется в 3D.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Возможности
 
-## React Compiler
+- **2D-редактор**: стены кликами (цепочкой), доводка до осей, сетка 0.5 м, выбор/перетаскивание узлов/удаление стен, автоматические размеры в метрах.
+- **Подложка из фото плана** с калибровкой масштаба: две точки + реальная длина → честный масштаб (`м/px`).
+- **3D-сцена**: стены объёмом (высота 2.7 м), тени, орбитальная камера, перетаскивание мебели мышью по полу, поворот на 90° двойным кликом.
+- **Каталог мебели** с поиском + загрузка собственных `.glb/.gltf` (габариты считаются из геометрии автоматически).
+- **Undo/redo** (`Ctrl+Z` / `Ctrl+Shift+Z`) на всю историю действий, включая drag одним шагом.
+- **Аккаунты и облако**: регистрация/вход (свой backend на Node + Postgres, JWT), сохранение проектов, **шаринг публичных ссылок** `#p=<uuid>` — чужой проект открывается в режиме просмотра, сохранение создаёт личную копию (форк).
+- **Экспорт/импорт** проекта в JSON, скриншот сцены в PNG.
+- **Автосохранение** локальной копии в localStorage.
+- **Docker**-сборка для локального запуска.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Стек
 
-## Expanding the Oxlint configuration
+| Слой | Технологии |
+|---|---|
+| Фронтенд | React 19 + TypeScript, Vite |
+| 2D | Konva / react-konva |
+| 3D | three.js, @react-three/fiber, @react-three/drei |
+| Состояние | zustand + zundo (undo/redo) |
+| Backend | Node.js (Express), JWT (jsonwebtoken), scrypt |
+| БД | PostgreSQL 16 (jsonb для данных проекта, RLS-подобные проверки владельца на уровне API) |
+| Деплой | Docker (nginx для статики), docker-compose |
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+## Структура проекта
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```
+room-planner/
+├── src/
+│   ├── components/
+│   │   ├── Toolbar.tsx        # инструменты, файлы (PNG/JSON), undo/redo, облако
+│   │   ├── CloudPanel.tsx     # вход/регистрация, сохранить, поделиться
+│   │   ├── PlanPanel.tsx      # 2D-редактор (Konva)
+│   │   ├── ViewportPanel.tsx  # 3D-сцена (R3F)
+│   │   └── CatalogPanel.tsx   # каталог + загрузка своих .glb
+│   ├── data/catalog.ts        # каталог мебели (размеры, цены, modelUrl)
+│   ├── lib/api.ts             # fetch-клиент API с JWT
+│   ├── store.ts               # zustand-store + temporal (undo) + автосохранение
+│   ├── types.ts               # Wall, PlacedItem, Underlay, Tool…
+│   ├── App.tsx                # лейаут, хоткеи, загрузка общей ссылки
+│   └── index.css
+├── server/
+│   ├── index.js               # Express API (:8787)
+│   ├── init.sql               # схема БД (users, projects)
+│   └── package.json
+├── docker-compose.yml         # Postgres + веб (nginx)
+├── Dockerfile                 # двухступенчатая сборка (node → nginx)
+├── nginx.conf
+└── .dockerignore
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Быстрый старт (разработка)
+
+Требуются: **Node 20+**, **Docker**.
+
+```bash
+# 1. зависимости фронтенда
+npm install
+
+# 2. база данных
+docker compose up -d db
+
+# 3. API-сервер
+cd server
+npm install
+npm run dev          # → http://localhost:8787
+
+# 4. фронтенд (в новом терминале)
+npm run dev          # → http://localhost:5173
+```
+
+Проверка типов: `npm run build`.
+
+### Переменные окружения
+
+Фронтенд (`.env.local`, опционально — дефолт уже правильный):
+
+```
+VITE_API_URL=http://localhost:8787
+```
+
+Сервер (опционально, дефолты для локальной разработки):
+
+```
+PORT=8787
+DATABASE_URL=postgres://planner:planner@localhost:5432/planner
+JWT_SECRET=смените-меня-в-продакшене
+```
+
+## Docker (локальный «продакшен»)
+
+```bash
+docker compose up --build -d   # веб на http://localhost:8080, БД на :5432
+docker compose logs -f
+docker compose down
+```
+
+> API-сервер в dev-режиме запускается через `node` (см. выше). Контейнеризация сервера — следующий шаг дорожной карты.
+
+## API
+
+| Метод | Путь | Auth | Описание |
+|---|---|---|---|
+| POST | `/api/auth/register` | — | регистрация; возвращает `{ id, email, token }` |
+| POST | `/api/auth/login` | — | вход; возвращает `{ id, email, token }` |
+| GET | `/api/me` | ✅ | текущий пользователь |
+| POST | `/api/projects` | ✅ | создать проект (`data: jsonb`) |
+| PUT | `/api/projects/:id` | ✅ владелец | обновить данные проекта |
+| POST | `/api/projects/:id/share` | ✅ владелец | сделать публичным |
+| GET | `/api/projects/:id` | опционально | прочитать: владелец **или** любой, если `is_public` |
+
+Пароли хранятся как `scrypt`-хеш с солью; доступ к чужим приватным проектам закрыт на уровне SQL-запросов (`owner_id` / `is_public`).
+
+## Управление
+
+| Действие | Как |
+|---|---|
+| Рисовать стены | инструмент «Стена», клики по углам; Esc / двойной клик — закончить |
+| Калибровка подложки | «📷 План» → загрузить фото → «Размер» → две точки → реальная длина |
+| Выбрать / изменить стену | «Выбор»: клик — выделить, узлы тянутся, `Delete` — удалить |
+| Обзор в 3D | мышь — вращение, колесо — зум |
+| Двигать мебель | тянуть мышью в 3D |
+| Повернуть мебель | двойной клик |
+| Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` (`Ctrl+Y`) |
+| Поделиться | ☁️ → войти → «🔗 Поделиться» (ссылка копируется в буфер) |
+
+## Координатная модель
+
+Все данные хранятся **в метрах**: `Wall = { a: {x,y}, b: {x,y} }`, где 2D-`y` в 3D становится `z`. Мебель — `PlacedItem = { uid, item, pos:[x,z], rotY }`. Габариты `item.size = [Ш, В, Г]` — модели масштабируются под объявленный размер, поэтому планировка остаётся точной независимо от «родного» масштаба GLB.
+
+## Известные ограничения прототипа
+
+- Свои `.glb` живут в blob-URL и не переживают перезагрузку страницы — предмет честно деградирует до бокса-заглушки (нужен IndexedDB).
+- Автосохранение в localStorage ограничено ~5 МБ — очень тяжёлые фото подложки могут не поместиться.
+- Инструмент «Дверь» объявлен в тулбаре, но ещё не реализован.
+
+## Дорожная карта
+
+- [ ] Двери и окна как проёмы в стенах (2D-разметка + сегментация стены в 3D)
+- [ ] IndexedDB для пользовательских моделей и подложек
+- [ ] Контейнеризация API, полный стек в docker-compose
+- [ ] AI «фото → 3D» с ручной калибровкой габаритов
+- [ ] AR-просмотр (WebXR / Quick Look)
+- [ ] Партнёрские интеграции мебельных магазинов («купить этот диван»)
+
+## Лицензия
+
+Прототип для обучения и демонстрации. Модели каталога по ссылкам — из набора Khronos glTF Sample Models (CC-лицензии авторов).
+
+---
+
+Если хотите, следующим сообщением продолжу код дверей/окон — или сначала соберёте текущее состояние и проверите шаринг?
