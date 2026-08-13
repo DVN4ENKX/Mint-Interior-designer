@@ -1,0 +1,23 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, sans-serif; }
+
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+.toolbar { display: flex; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #ddd; }
+.tool { padding: 6px 14px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; }
+.tool.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+
+.panels { flex: 1; display: grid; grid-template-columns: 300px 1fr 280px; gap: 12px; padding: 12px; min-height: 0; }
+.panel { border: 1px solid #ddd; border-radius: 12px; background: #fafafa; padding: 12px; overflow: auto; }
+
+.card { background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+.card .meta { color: #777; font-size: 12px; margin: 4px 0; }
+.card button { width: 100%; padding: 6px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+
+.search { width: 100%; padding: 6px 8px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 6px; }
+.placed { cursor: pointer; padding: 4px 6px; border-radius: 6px; }
+.placed:hover { background: #fee2e2; text-decoration: line-through; }
+.total { margin-top: 10px; font-weight: 600; }
+
+.spacer { flex: 1; }
+.tool:disabled { opacity: .4; cursor: default; }
