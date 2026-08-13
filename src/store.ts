@@ -2,7 +2,9 @@ import { create } from 'zustand'
 import { temporal } from 'zundo'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
-import type { CatalogItem, PlacedItem, Point, Tool, Underlay, Wall } from './types'
+import type { CatalogItem, Opening, PlacedItem, Point, Tool, Underlay, Wall } from './types'
+import { blobUrl, idbGet, idbSet, toBlob } from './lib/idb'
+import { wallLen } from './lib/openings'
 
 const wallsCenter = (walls: Wall[]): [number, number] => {
   if (walls.length === 0) return [0, 0]
@@ -21,21 +23,43 @@ export type Persisted = {
   walls: Wall[]
   placed: PlacedItem[]
   underlay: Underlay | null
+  openings: Opening[]
+  customCatalog: CatalogItem[]
 }
 
 const LS_KEY = 'room-planner:v1'
+const LS_PROJECT = 'room-planner:project'
 
 function loadPersisted(): Persisted {
   try {
     const raw = localStorage.getItem(LS_KEY)
     if (raw) {
       const p = JSON.parse(raw)
-      return { walls: p.walls ?? [], placed: p.placed ?? [], underlay: p.underlay ?? null }
+      return {
+        walls: p.walls ?? [],
+        placed: p.placed ?? [],
+        underlay: p.underlay ?? null,
+        openings: p.openings ?? [],
+        customCatalog: p.customCatalog ?? [],
+      }
     }
   } catch {
     /* повреждённые данные — начинаем с чистого листа */
   }
-  return { walls: [], placed: [], underlay: null }
+  return { walls: [], placed: [], underlay: null, openings: [], customCatalog: [] }
+}
+
+function loadProjectMeta(): { projectId: string | null; readOnly: boolean } {
+  try {
+    const raw = localStorage.getItem(LS_PROJECT)
+    if (raw) {
+      const m = JSON.parse(raw)
+      return { projectId: m.projectId ?? null, readOnly: !!m.readOnly }
+    }
+  } catch {
+    /* повреждённые данные — без привязки к облачному проекту */
+  }
+  return { projectId: null, readOnly: false }
 }
 
 type PlanState = Persisted & {
@@ -44,7 +68,8 @@ type PlanState = Persisted & {
   clearRoom: () => void
   moveItem: (uid: string, pos: [number, number]) => void
   rotateItem: (uid: string) => void
-  hydrate: (p: Persisted) => void
+  rotateItemBy: (uid: string, angle: number) => void
+  hydrate: (p: Partial<Persisted>) => void
   exportJson: () => void
   importJson: (file: File) => Promise<void>
 
@@ -56,10 +81,31 @@ type PlanState = Persisted & {
   addWall: (a: Point, b: Point) => void
   updateWallEnd: (id: string, end: 'a' | 'b', p: Point) => void
   removeWall: (id: string) => void
+  clearWalls: () => void
   selectedWallId: string | null
   selectWall: (id: string | null) => void
+  setWallColor: (id: string, color: string) => void
+  paintAllWalls: (color: string) => void
   setUnderlay: (url: string) => void
+  setUnderlayUrl: (url: string) => void
+  clearUnderlay: () => void
   calibrateUnderlay: (metersPerPx: number) => void
+  setCustomModelUrl: (id: string, url: string) => void
+
+  openings: Opening[]
+  addOpening: (wallId: string, t: number, kind: Opening['kind']) => void
+  updateOpening: (id: string, patch: Partial<Opening>) => void
+  removeOpening: (id: string) => void
+  selectedOpeningId: string | null
+  selectOpening: (id: string | null) => void
+
+  selectedPlacedId: string | null
+  selectPlaced: (id: string | null) => void
+
+  projectId: string | null
+  setProjectId: (id: string | null) => void
+  readOnly: boolean
+  setReadOnly: (b: boolean) => void
 }
 
 export const usePlanStore = create<PlanState>()(
@@ -81,11 +127,15 @@ export const usePlanStore = create<PlanState>()(
                 pos: [cx + (n % 3) * 0.7 - 0.7, cy + Math.floor(n / 3) * 0.7 - 0.7],
               },
             ],
+            selectedPlacedId: null,
           }
         }),
       removeFromRoom: (uid) =>
-        set((s) => ({ placed: s.placed.filter((p) => p.uid !== uid) })),
-      clearRoom: () => set({ placed: [] }),
+        set((s) => ({
+          placed: s.placed.filter((p) => p.uid !== uid),
+          selectedPlacedId: s.selectedPlacedId === uid ? null : s.selectedPlacedId,
+        })),
+      clearRoom: () => set({ placed: [], selectedPlacedId: null }),
       moveItem: (uid, pos) =>
         set((s) => ({
           placed: s.placed.map((p) => (p.uid === uid ? { ...p, pos } : p)),
@@ -96,15 +146,35 @@ export const usePlanStore = create<PlanState>()(
             p.uid === uid ? { ...p, rotY: p.rotY + Math.PI / 2 } : p,
           ),
         })),
+      rotateItemBy: (uid, angle) =>
+        set((s) => ({
+          placed: s.placed.map((p) =>
+            p.uid === uid ? { ...p, rotY: p.rotY + angle } : p,
+          ),
+        })),
 
       hydrate: (p) =>
-        set({ walls: p.walls, placed: p.placed, underlay: p.underlay, selectedWallId: null }),
+        set({
+          walls: p.walls ?? [],
+          placed: p.placed ?? [],
+          underlay: p.underlay ?? null,
+          openings: p.openings ?? [],
+          customCatalog: p.customCatalog ?? [],
+          selectedWallId: null,
+          selectedOpeningId: null,
+          selectedPlacedId: null,
+        }),
 
       exportJson: () => {
-        const { walls, placed, underlay } = get()
-        const blob = new Blob([JSON.stringify({ walls, placed, underlay }, null, 2)], {
-          type: 'application/json',
-        })
+        const { walls, placed, underlay, openings, customCatalog } = get()
+        const out = {
+          walls,
+          placed,
+          underlay,
+          openings,
+          customCatalog: customCatalog.map(({ modelUrl: _modelUrl, ...rest }) => rest),
+        }
+        const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' })
         const a = document.createElement('a')
         a.href = URL.createObjectURL(blob)
         a.download = 'room-plan.json'
@@ -119,25 +189,30 @@ export const usePlanStore = create<PlanState>()(
             walls: p.walls ?? [],
             placed: p.placed ?? [],
             underlay: p.underlay ?? null,
+            openings: p.openings ?? [],
+            customCatalog: p.customCatalog ?? [],
           })
         } catch {
           alert('Это не похоже на JSON проекта')
         }
       },
 
-      customCatalog: [],
+      // инициализируется из loadPersisted() (см. разворачивание в начале состояния)
       uploadModel: async (file) => {
         try {
           const url = URL.createObjectURL(file)
           const gltf = await new GLTFLoader().loadAsync(url)
           const v = new THREE.Box3().setFromObject(gltf.scene).getSize(new THREE.Vector3())
+          const id = 'custom-' + crypto.randomUUID()
           const item: CatalogItem = {
-            id: 'custom-' + crypto.randomUUID(),
+            id,
             name: file.name.replace(/\.(glb|gltf)$/i, ''),
             price: 0,
             size: [r2(v.x), r2(v.y), r2(v.z)],
             modelUrl: url,
+            category: 'Мои модели',
           }
+          await idbSet('model:' + id, file)
           set((s) => ({ customCatalog: [...s.customCatalog, item] }))
           get().addToRoom(item)
         } catch {
@@ -146,9 +221,8 @@ export const usePlanStore = create<PlanState>()(
       },
 
       tool: 'Выбор',
-      setTool: (tool) => set({ tool, selectedWallId: null }),
+      setTool: (tool) => set({ tool, selectedWallId: null, selectedOpeningId: null }),
 
-      walls: [],
       addWall: (a, b) =>
         set((s) => ({ walls: [...s.walls, { id: crypto.randomUUID(), a, b }] })),
       updateWallEnd: (id, end, p) =>
@@ -158,19 +232,89 @@ export const usePlanStore = create<PlanState>()(
           ),
         })),
       removeWall: (id) =>
-        set((s) => ({ walls: s.walls.filter((w) => w.id !== id) })),
+        set((s) => ({
+          walls: s.walls.filter((w) => w.id !== id),
+          openings: s.openings.filter((o) => o.wallId !== id),
+          selectedOpeningId: s.selectedOpeningId && s.openings.find((o) => o.id === s.selectedOpeningId)?.wallId === id ? null : s.selectedOpeningId,
+        })),
+      clearWalls: () => set({ walls: [], openings: [], selectedWallId: null, selectedOpeningId: null }),
 
       selectedWallId: null,
-      selectWall: (selectedWallId) => set({ selectedWallId }),
+      selectWall: (selectedWallId) => set({ selectedWallId, selectedOpeningId: null }),
+      setWallColor: (id, color) =>
+        set((s) => ({ walls: s.walls.map((w) => (w.id === id ? { ...w, color } : w)) })),
+      paintAllWalls: (color) =>
+        set((s) => ({ walls: s.walls.map((w) => ({ ...w, color })) })),
 
-      underlay: null,
-      setUnderlay: (url) => set({ underlay: { url, metersPerPx: 0.02 } }),
+      setUnderlay: (url) => {
+        set({ underlay: { url, metersPerPx: 0.02 } })
+        void (async () => {
+          try {
+            const blob = await toBlob(url)
+            await idbSet('underlay', blob)
+            // заменяем тяжёлый data-URL на лёгкий blob-URL (сам файл теперь в IDB)
+            usePlanStore.getState().setUnderlayUrl(URL.createObjectURL(blob))
+          } catch {
+            /* не сохранилось в IDB — используем URL как есть */
+          }
+        })()
+      },
+      setUnderlayUrl: (url) =>
+        set((s) => (s.underlay ? { underlay: { ...s.underlay, url } } : {})),
+      clearUnderlay: () => set({ underlay: null }),
       calibrateUnderlay: (metersPerPx) =>
         set((s) => (s.underlay ? { underlay: { ...s.underlay, metersPerPx } } : {})),
+
+      setCustomModelUrl: (id, url) =>
+        set((s) => ({
+          customCatalog: s.customCatalog.map((i) => (i.id === id ? { ...i, modelUrl: url } : i)),
+        })),
+
+      openings: [],
+      addOpening: (wallId, t, kind) =>
+        set((s) => {
+          const wall = s.walls.find((w) => w.id === wallId)
+          if (!wall) return {}
+          const L = wallLen(wall)
+          const width = kind === 'door' ? 0.9 : 1.2
+          const height = kind === 'door' ? 2.1 : 1.3
+          const half = Math.min(width / 2, L / 2 - 1e-4)
+          const tt = Math.min(Math.max(t, half / Math.max(L, 1e-9)), 1 - half / Math.max(L, 1e-9))
+          const o: Opening = {
+            id: crypto.randomUUID(),
+            wallId,
+            kind,
+            t: tt,
+            width,
+            height,
+            sill: kind === 'window' ? 0.9 : undefined,
+          }
+          return { openings: [...s.openings, o], selectedOpeningId: o.id }
+        }),
+      updateOpening: (id, patch) =>
+        set((s) => ({ openings: s.openings.map((o) => (o.id === id ? { ...o, ...patch } : o)) })),
+      removeOpening: (id) =>
+        set((s) => ({
+          openings: s.openings.filter((o) => o.id !== id),
+          selectedOpeningId: s.selectedOpeningId === id ? null : s.selectedOpeningId,
+        })),
+      selectedOpeningId: null,
+      selectOpening: (selectedOpeningId) => set({ selectedOpeningId, selectedWallId: null }),
+
+      selectedPlacedId: null,
+      selectPlaced: (selectedPlacedId) => set({ selectedPlacedId, selectedWallId: null, selectedOpeningId: null }),
+
+      ...loadProjectMeta(),
+      setProjectId: (projectId) => set({ projectId }),
+      setReadOnly: (readOnly) => set({ readOnly }),
     }),
     {
       limit: 50,
-      partialize: (state) => ({ placed: state.placed, walls: state.walls }),
+      partialize: (state) => ({
+        placed: state.placed,
+        walls: state.walls,
+        openings: state.openings,
+      }),
     },
   ),
 )
@@ -183,10 +327,53 @@ usePlanStore.subscribe((state) => {
     try {
       localStorage.setItem(
         LS_KEY,
-        JSON.stringify({ walls: state.walls, placed: state.placed, underlay: state.underlay }),
+        JSON.stringify({
+          walls: state.walls,
+          placed: state.placed,
+          underlay: state.underlay,
+          openings: state.openings,
+          // blob-URL умирает при перезагрузке — сам файл лежит в IDB, вернём через restoreAssets
+          customCatalog: state.customCatalog.map(({ modelUrl: _modelUrl, ...rest }) => rest),
+        }),
+      )
+      localStorage.setItem(
+        LS_PROJECT,
+        JSON.stringify({ projectId: state.projectId, readOnly: state.readOnly }),
       )
     } catch {
-      console.warn('Не удалось сохранить проект (кваота localStorage)')
+      console.warn('Не удалось сохранить проект (квota localStorage)')
     }
   }, 500)
 })
+
+// после загрузки страницы восстанавливаем object-URL моделей и подложки из IndexedDB
+export async function restoreAssets() {
+  const s = usePlanStore.getState()
+
+  for (const item of s.customCatalog) {
+    if (item.modelUrl) continue
+    const blob = await idbGet('model:' + item.id).catch(() => null)
+    if (blob) usePlanStore.getState().setCustomModelUrl(item.id, blobUrl(blob))
+  }
+
+  const u = s.underlay
+  if (u) {
+    if (u.url.startsWith('blob:')) {
+      const blob = await idbGet('underlay').catch(() => null)
+      if (blob) usePlanStore.getState().setUnderlayUrl(blobUrl(blob))
+      else usePlanStore.getState().clearUnderlay()
+    } else if (u.url.startsWith('data:')) {
+      // миграция старых data-URL в IDB, чтобы не занимать квоту localStorage
+      try {
+        const blob = await toBlob(u.url)
+        await idbSet('underlay', blob)
+        usePlanStore.getState().setUnderlayUrl(blobUrl(blob))
+      } catch {
+        /* оставляем data-URL как есть */
+      }
+    }
+  }
+}
+
+// стартуем восстановление сразу после инициализации (клиент)
+if (typeof window !== 'undefined') void restoreAssets()

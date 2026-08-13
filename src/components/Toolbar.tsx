@@ -2,7 +2,7 @@ import { useStore } from 'zustand'
 import { usePlanStore } from '../store'
 import type { Tool } from '../types'
 
-const TOOLS: Tool[] = ['Выбор', 'Стена', 'Дверь', 'Размер']
+const TOOLS: Tool[] = ['Выбор', 'Стена', 'Дверь', 'Окно', 'Размер']
 
 const screenshot = () => {
   const canvas = document.querySelector('canvas') as HTMLCanvasElement | null
@@ -20,32 +20,58 @@ export default function Toolbar() {
   const canRedo = useStore(usePlanStore.temporal, (s) => s.futureStates.length > 0)
 
   return (
-    <header className="toolbar">
-      {TOOLS.map((t) => (
-        <button key={t} className={t === tool ? 'tool active' : 'tool'} onClick={() => setTool(t)}>
-          {t}
-        </button>
-      ))}
-      <span className="spacer" />
-      <button className="tool" onClick={screenshot}>📷 PNG</button>
-      <button className="tool" onClick={() => usePlanStore.getState().exportJson()}>💾 Экспорт</button>
-      <label className="tool">
-        📂 Импорт
-        <input
-          type="file"
-          accept=".json,application/json"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const f = e.target.files?.[0]
-            if (f) usePlanStore.getState().importJson(f)
-            e.target.value = ''
+    <header className="toolbar d-flex align-items-center gap-2 flex-wrap px-3 py-2">
+      <span className="app-title me-1">🏠 Room Planner</span>
+      <div className="btn-group btn-group-sm">
+        {TOOLS.map((t) => (
+          <button
+            key={t}
+            className={`btn ${t === tool ? 'btn-primary' : 'btn-outline-secondary'}`}
+            onClick={() => setTool(t)}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+      <div className="btn-group btn-group-sm ms-auto">
+        <button className="btn btn-outline-secondary" onClick={screenshot}>📷 PNG</button>
+        <button className="btn btn-outline-secondary" onClick={() => usePlanStore.getState().exportJson()}>💾 Экспорт</button>
+        <label className="btn btn-outline-secondary mb-0">
+          📂 Импорт
+          <input
+            type="file"
+            accept=".json,application/json"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) usePlanStore.getState().importJson(f)
+              e.target.value = ''
+            }}
+          />
+        </label>
+        <button className="btn btn-outline-secondary" disabled={!canUndo}
+          onClick={() => usePlanStore.temporal.getState().undo()}>↩</button>
+        <button className="btn btn-outline-secondary" disabled={!canRedo}
+          onClick={() => usePlanStore.temporal.getState().redo()}>↪</button>
+      </div>
+      <div className="btn-group btn-group-sm">
+        <button
+          className="btn btn-outline-danger"
+          onClick={() => {
+            if (confirm('Очистить все стены (и проёмы)?')) usePlanStore.getState().clearWalls()
           }}
-        />
-      </label>
-      <button className="tool" disabled={!canUndo}
-        onClick={() => usePlanStore.temporal.getState().undo()}>↩</button>
-      <button className="tool" disabled={!canRedo}
-        onClick={() => usePlanStore.temporal.getState().redo()}>↪</button>
+        >
+          🧱 Стены
+        </button>
+        <button
+          className="btn btn-outline-danger"
+          onClick={() => {
+            if (confirm('Убрать всю мебель из комнаты?')) usePlanStore.getState().clearRoom()
+          }}
+        >
+          🪑 Мебель
+        </button>
+      </div>
     </header>
   )
 }
