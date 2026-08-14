@@ -10,12 +10,48 @@ services:
     volumes:
       - ./server/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U planner -d planner"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  server:
+    build: ./server
+    environment:
+      PORT: "8787"
+      DATABASE_URL: postgres://planner:planner@db:5432/planner
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  reconstructor:
+    build: ./reconstructor
+    environment:
+      PORT: "8788"
+      TRIPOSR_MODEL: stabilityai/TripoSR
+      MC_RESOLUTION: "192"
+      HF_HOME: /root/.cache/huggingface
+      U2NET_HOME: /root/.cache/u2net
+    volumes:
+      - recon_cache:/root/.cache
+    restart: unless-stopped
 
   planner:
-    build: .
+    build:
+      context: .
+      args:
+        VITE_API_URL: /
+        VITE_RECONSTRUCTOR_URL: /
     ports:
       - "8080:80"
+    depends_on:
+      - server
+      - reconstructor
     restart: unless-stopped
 
 volumes:
   dbdata:
+  recon_cache:

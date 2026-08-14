@@ -7,6 +7,14 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Python-сервис реконструкции (TripoSR)
+reconstructor/.venv
+reconstructor/.out
+reconstructor/.logs
+reconstructor/triposr/**/__pycache__
+reconstructor/__pycache__
+reconstructor/*.egg-info
+
 node_modules
 dist
 dist-ssr
@@ -22,3 +30,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+*.jpeg
+*.png
+*.gif
+*.jpg

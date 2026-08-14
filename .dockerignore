@@ -1,3 +1,7 @@
 node_modules
 dist
 .git
+server/node_modules
+reconstructor/.venv
+reconstructor/.out
+reconstructor/.logs

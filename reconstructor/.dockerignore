@@ -1,0 +1,7 @@
+.venv
+.out
+.logs
+__pycache__
+*.pyc
+triposr/.git
+triposr/**/__pycache__

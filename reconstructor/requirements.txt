@@ -1,0 +1,17 @@
+# Python 3.13, CPU-only. TripoSR с ослабленными пинами (оригинальные 4.35/10.1
+# не имеют колёс под 3.13) и без тяжёлых деп-ов: torchmcubes (нет колёс под
+# Windows/3.13, вместо него scikit-image), moderngl/xatlas/gradio (нужны только
+# для запекания текстур/демо), imageio[ffmpeg] (нужен только для видео).
+omegaconf==2.3.0
+Pillow>=10.4
+einops>=0.7
+transformers==4.49.0
+trimesh>=4
+rembg>=2.0
+huggingface-hub>=0.23
+numpy>=1.26
+scikit-image>=0.24
+imageio>=2.34
+fastapi>=0.111
+uvicorn>=0.30
+python-multipart>=0.0.9
