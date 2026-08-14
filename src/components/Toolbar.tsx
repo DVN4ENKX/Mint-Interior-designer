@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { useStore } from 'zustand'
 import { usePlanStore } from '../store'
 import type { Tool } from '../types'
+import TemplateModal from './TemplateModal'
 
 const TOOLS: Tool[] = ['Выбор', 'Стена', 'Дверь', 'Окно', 'Размер']
 
@@ -18,6 +20,7 @@ export default function Toolbar() {
   const setTool = usePlanStore((s) => s.setTool)
   const canUndo = useStore(usePlanStore.temporal, (s) => s.pastStates.length > 0)
   const canRedo = useStore(usePlanStore.temporal, (s) => s.futureStates.length > 0)
+  const [tplOpen, setTplOpen] = useState(false)
 
   return (
     <header className="toolbar d-flex align-items-center gap-2 flex-wrap px-3 py-2">
@@ -34,6 +37,7 @@ export default function Toolbar() {
         ))}
       </div>
       <div className="btn-group btn-group-sm ms-auto">
+        <button className="btn btn-outline-secondary" onClick={() => setTplOpen(true)}>🏗 Шаблоны</button>
         <button className="btn btn-outline-secondary" onClick={screenshot}>📷 PNG</button>
         <button className="btn btn-outline-secondary" onClick={() => usePlanStore.getState().exportJson()}>💾 Экспорт</button>
         <label className="btn btn-outline-secondary mb-0">
@@ -72,6 +76,7 @@ export default function Toolbar() {
           🪑 Мебель
         </button>
       </div>
+      <TemplateModal open={tplOpen} onClose={() => setTplOpen(false)} />
     </header>
   )
 }

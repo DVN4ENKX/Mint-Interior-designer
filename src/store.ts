@@ -5,6 +5,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import type { CatalogItem, Opening, PlacedItem, Point, Tool, Underlay, Wall } from './types'
 import { blobUrl, idbGet, idbSet, toBlob } from './lib/idb'
 import { wallLen } from './lib/openings'
+import { stackHeightAt } from './lib/collision'
+import type { RoomTemplate } from './data/templates'
 
 const wallsCenter = (walls: Wall[]): [number, number] => {
   if (walls.length === 0) return [0, 0]
@@ -69,6 +71,7 @@ type PlanState = Persisted & {
   moveItem: (uid: string, pos: [number, number]) => void
   rotateItem: (uid: string) => void
   rotateItemBy: (uid: string, angle: number) => void
+  rotateItemAround: (uid: string, axis: 'x' | 'y' | 'z', angle: number) => void
   hydrate: (p: Partial<Persisted>) => void
   exportJson: () => void
   importJson: (file: File) => Promise<void>
@@ -82,6 +85,7 @@ type PlanState = Persisted & {
   updateWallEnd: (id: string, end: 'a' | 'b', p: Point) => void
   removeWall: (id: string) => void
   clearWalls: () => void
+  applyTemplate: (tpl: RoomTemplate) => void
   selectedWallId: string | null
   selectWall: (id: string | null) => void
   setWallColor: (id: string, color: string) => void
@@ -117,14 +121,22 @@ export const usePlanStore = create<PlanState>()(
         set((s) => {
           const [cx, cy] = wallsCenter(s.walls)
           const n = s.placed.length
+          const uid = crypto.randomUUID()
+          const pos: [number, number] = [
+            cx + (n % 3) * 0.7 - 0.7,
+            cy + Math.floor(n / 3) * 0.7 - 0.7,
+          ]
           return {
             placed: [
               ...s.placed,
               {
-                uid: crypto.randomUUID(),
+                uid,
                 item,
                 rotY: 0,
-                pos: [cx + (n % 3) * 0.7 - 0.7, cy + Math.floor(n / 3) * 0.7 - 0.7],
+                rotX: 0,
+                rotZ: 0,
+                pos,
+                y: stackHeightAt(pos[0], pos[1], uid, s.placed),
               },
             ],
             selectedPlacedId: null,
@@ -137,9 +149,17 @@ export const usePlanStore = create<PlanState>()(
         })),
       clearRoom: () => set({ placed: [], selectedPlacedId: null }),
       moveItem: (uid, pos) =>
-        set((s) => ({
-          placed: s.placed.map((p) => (p.uid === uid ? { ...p, pos } : p)),
-        })),
+        set((s) => {
+          const next = s.placed.map((p) => (p.uid === uid ? { ...p, pos } : p))
+          return {
+            // пересчитываем высоту основания всех предметов: предмет встаёт на самый
+            // высокий предмет под своим центром (мебель можно ставить друг на друга)
+            placed: next.map((p) => ({
+              ...p,
+              y: stackHeightAt(p.pos[0], p.pos[1], p.uid, next),
+            })),
+          }
+        }),
       rotateItem: (uid) =>
         set((s) => ({
           placed: s.placed.map((p) =>
@@ -151,6 +171,15 @@ export const usePlanStore = create<PlanState>()(
           placed: s.placed.map((p) =>
             p.uid === uid ? { ...p, rotY: p.rotY + angle } : p,
           ),
+        })),
+      rotateItemAround: (uid, axis, angle) =>
+        set((s) => ({
+          placed: s.placed.map((p) => {
+            if (p.uid !== uid) return p
+            if (axis === 'x') return { ...p, rotX: (p.rotX ?? 0) + angle }
+            if (axis === 'z') return { ...p, rotZ: (p.rotZ ?? 0) + angle }
+            return { ...p, rotY: p.rotY + angle }
+          }),
         })),
 
       hydrate: (p) =>
@@ -239,6 +268,42 @@ export const usePlanStore = create<PlanState>()(
         })),
       clearWalls: () => set({ walls: [], openings: [], selectedWallId: null, selectedOpeningId: null }),
 
+      // применяет шаблон комнаты/квартиры: заменяет стены и проёмы (мебель остаётся)
+      applyTemplate: (tpl) =>
+        set(() => {
+          const walls = tpl.walls.map((w) => ({
+            id: crypto.randomUUID(),
+            a: { x: w.a[0], y: w.a[1] },
+            b: { x: w.b[0], y: w.b[1] },
+          }))
+          const openings = tpl.openings.flatMap((o) => {
+            const wall = walls[o.wall]
+            if (!wall) return []
+            const L = wallLen(wall)
+            const width = o.kind === 'door' ? 0.9 : 1.2
+            const height = o.kind === 'door' ? 2.1 : 1.3
+            const half = Math.min(width / 2, L / 2 - 1e-4)
+            const t = Math.min(Math.max(o.t, half / Math.max(L, 1e-9)), 1 - half / Math.max(L, 1e-9))
+            return [
+              {
+                id: crypto.randomUUID(),
+                wallId: wall.id,
+                kind: o.kind,
+                t,
+                width,
+                height,
+                sill: o.kind === 'window' ? 0.9 : undefined,
+              },
+            ]
+          })
+          return {
+            walls,
+            openings,
+            selectedWallId: null,
+            selectedOpeningId: null,
+          }
+        }),
+
       selectedWallId: null,
       selectWall: (selectedWallId) => set({ selectedWallId, selectedOpeningId: null }),
       setWallColor: (id, color) =>
@@ -318,6 +383,30 @@ export const usePlanStore = create<PlanState>()(
     },
   ),
 )
+
+let dragStartSnapshot: { placed: PlacedItem[]; walls: Wall[]; openings: Opening[] } | null = null
+
+function planSnapshot(s: { placed: PlacedItem[]; walls: Wall[]; openings: Opening[] }) {
+  return { placed: s.placed, walls: s.walls, openings: s.openings }
+}
+
+export function beginDrag() {
+  dragStartSnapshot = planSnapshot(usePlanStore.getState())
+  usePlanStore.temporal.getState().pause()
+}
+
+export function endDrag() {
+  usePlanStore.temporal.getState().resume()
+  const start = dragStartSnapshot
+  dragStartSnapshot = null
+  if (!start) return
+  const current = planSnapshot(usePlanStore.getState())
+  if (JSON.stringify(start) === JSON.stringify(current)) return
+  const temporal = usePlanStore.temporal.getState() as unknown as {
+    _handleSet: (past: unknown, replace: unknown, current: unknown, delta?: unknown) => void
+  }
+  temporal._handleSet(start, void 0, current, void 0)
+}
 
 // автосохранение: каждое изменение, но не чаще раза в 500 мс
 let saveTimer: number | undefined

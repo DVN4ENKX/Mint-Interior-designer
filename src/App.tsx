@@ -56,9 +56,13 @@ export default function App() {
 
   useEffect(() => {
     if (planManual) return
-    let maxX = 0
-    for (const w of walls) maxX = Math.max(maxX, w.a.x, w.b.x)
-    setPlanWidth(clampW(maxX > 0 ? Math.ceil((maxX + 1.5) * S) : MIN_W))
+    let minX = Infinity, maxX = -Infinity
+    for (const w of walls) {
+      minX = Math.min(minX, w.a.x, w.b.x)
+      maxX = Math.max(maxX, w.a.x, w.b.x)
+    }
+    const span = isFinite(minX) ? maxX - minX + 1.5 : 0
+    setPlanWidth(clampW(span > 0 ? Math.ceil(span * S) : MIN_W))
   }, [walls, planManual])
 
   useEffect(() => {

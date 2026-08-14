@@ -6,9 +6,27 @@ import * as THREE from 'three'
 import { usePlanStore } from '../store'
 import type { Opening, PlacedItem, Wall } from '../types'
 import { WALL_T, wallBoxes, wallLen } from '../lib/openings'
-import { collidesAt } from '../lib/collision'
+import { collidesWalls, stackHeightAt } from '../lib/collision'
 
 const snap = (v: number) => Math.round(v * 10) / 10
+
+// на сколько поднять предмет, чтобы при наклоне по X/Z он не уходил под пол (y = 0)
+function floorLift(
+  size: [number, number, number],
+  rotX: number,
+  rotY: number,
+  rotZ: number,
+): number {
+  const [w, h, d] = size
+  const box = new THREE.Box3(
+    new THREE.Vector3(-w / 2, 0, -d / 2),
+    new THREE.Vector3(w / 2, h, d / 2),
+  )
+  box.applyMatrix4(
+    new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(rotX, rotY, rotZ, 'XYZ')),
+  )
+  return Math.max(0, -box.min.y)
+}
 
 function bbox(walls: Wall[]) {
   if (walls.length === 0) return { minX: -3, maxX: 3, minZ: -3, maxZ: 3 }
@@ -152,11 +170,18 @@ function ItemMesh({
   onStartDrag: (uid: string, pos: [number, number]) => void
 }) {
   const rotateItemBy = usePlanStore((s) => s.rotateItemBy)
+  const selectPlaced = usePlanStore((s) => s.selectPlaced)
+  const placed = usePlanStore((s) => s.placed)
   const [w, h, d] = item.item.size
   const [x, z] = override ?? item.pos
+  const lastRightClick = useRef(0)
+  const lift = floorLift(item.item.size, item.rotX ?? 0, item.rotY, item.rotZ ?? 0)
+  // во время перетаскивания высота считается по текущей точке (предмет встаёт на другой),
+  // после отпускания — по сохранённому значению из store
+  const baseY = override ? stackHeightAt(x, z, item.uid, placed) : (item.y ?? 0)
 
   const box = (
-    <mesh castShadow>
+    <mesh position={[0, h / 2, 0]} castShadow>
       <boxGeometry args={[w, h, d]} />
       <meshStandardMaterial color={colorFor(item.item.id)} />
     </mesh>
@@ -164,14 +189,27 @@ function ItemMesh({
 
   return (
     <group
-      position={[x, item.item.modelUrl ? 0 : h / 2, z]}
-      rotation-y={item.rotY}
+      position={[x, baseY + lift, z]}
+      rotation={[item.rotX ?? 0, item.rotY, item.rotZ ?? 0]}
       onPointerDown={(e) => {
+        if (e.button !== 0) return
         e.stopPropagation()
+        selectPlaced(item.uid)
         onStartDrag(item.uid, item.pos)
         document.body.style.cursor = 'grabbing'
       }}
       onDoubleClick={() => rotateItemBy(item.uid, Math.PI / 18)}
+      onContextMenu={(e) => {
+        e.stopPropagation()
+        e.nativeEvent.preventDefault()
+        const now = Date.now()
+        if (now - lastRightClick.current < 350) {
+          lastRightClick.current = 0
+          rotateItemBy(item.uid, -Math.PI / 18)
+        } else {
+          lastRightClick.current = now
+        }
+      }}
     >
       {item.item.modelUrl ? (
         <ModelErrorBoundary fallback={box}>
@@ -225,6 +263,7 @@ function Scene() {
   const placed = usePlanStore((s) => s.placed)
   const openings = usePlanStore((s) => s.openings)
   const moveItem = usePlanStore((s) => s.moveItem)
+  const selectPlaced = usePlanStore((s) => s.selectPlaced)
 
   const [drag, setDrag] = useState<{ uid: string; pos: [number, number] } | null>(null)
   const dragRef = useRef(drag)
@@ -255,7 +294,9 @@ function Scene() {
     if (!d) return cand
     const self = placed.find((p) => p.uid === d.uid)
     if (!self) return cand
-    if (!collidesAt(cand[0], cand[1], self.item.size, self.rotY, d.uid, placed)) return cand
+    const size = self.item.size
+    // предметы можно ставить друг на друга — ограничиваем только стенами
+    if (!collidesWalls(cand[0], cand[1], size, self.rotY, walls, openings)) return cand
     return d.pos
   }
 
@@ -279,6 +320,7 @@ function Scene() {
         rotation-x={-Math.PI / 2}
         position={[cx, 0, cz]}
         receiveShadow
+        onPointerDown={() => selectPlaced(null)}
         onPointerMove={(e) => {
           if (drag) {
             const pos = freePos([snap(e.point.x), snap(e.point.z)])
@@ -310,9 +352,15 @@ function Scene() {
 
 export default function ViewportPanel() {
   const placed = usePlanStore((s) => s.placed)
+  const selectedPlacedId = usePlanStore((s) => s.selectedPlacedId)
+  const rotateItemAround = usePlanStore((s) => s.rotateItemAround)
   const total = placed.reduce((sum, p) => sum + p.item.price, 0)
+  const selectedItem = placed.find((p) => p.uid === selectedPlacedId) ?? null
   return (
-    <section className="card viewport-panel position-relative overflow-hidden">
+    <section
+      className="card viewport-panel position-relative overflow-hidden"
+      onContextMenu={(e) => e.preventDefault()}
+    >
       <Canvas
         shadows
         gl={{ preserveDrawingBuffer: true, alpha: true }}
@@ -320,10 +368,56 @@ export default function ViewportPanel() {
       >
         <Scene />
       </Canvas>
+      {selectedItem && (
+        <div className="selection-controls">
+          <span
+            className="small fw-semibold text-truncate"
+            title={selectedItem.item.name}
+          >
+            {selectedItem.item.name}
+          </span>
+          <span className="small text-secondary">X</span>
+          <button
+            type="button"
+            className="btn btn-sm btn-outline-secondary py-0 px-2"
+            onClick={() => rotateItemAround(selectedItem.uid, 'x', -Math.PI / 18)}
+            title="Наклон по X на −10°"
+          >
+            −10°
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-outline-secondary py-0 px-2"
+            onClick={() => rotateItemAround(selectedItem.uid, 'x', Math.PI / 18)}
+            title="Наклон по X на +10°"
+          >
+            +10°
+          </button>
+          <span className="small text-secondary ms-1">Z</span>
+          <button
+            type="button"
+            className="btn btn-sm btn-outline-secondary py-0 px-2"
+            onClick={() => rotateItemAround(selectedItem.uid, 'z', -Math.PI / 18)}
+            title="Наклон по Z на −10°"
+          >
+            −10°
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-outline-secondary py-0 px-2"
+            onClick={() => rotateItemAround(selectedItem.uid, 'z', Math.PI / 18)}
+            title="Наклон по Z на +10°"
+          >
+            +10°
+          </button>
+        </div>
+      )}
       <div className="hud">
         Предметов: {placed.length} · Итого: {total.toLocaleString('ru-RU')} ₽
         <br />
-        Мышь — обзор, колесо — зум, мебель тащим мышью, двойной клик — поворот на 10°
+        Мышь — обзор, колесо — зум, мебель тащим мышью. Двойной клик — поворот на 10°,
+        ПКМ × 2 — на −10° (ось X/Z — кнопки на панели при выборе объекта). Предметы можно
+        ставить друг на друга — верхний встанет на верхнюю грань нижнего
       </div>
     </section>
   )

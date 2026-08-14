@@ -12,6 +12,9 @@ export type PlacedItem = {
   item: CatalogItem
   pos: [number, number]
   rotY: number
+  rotX?: number
+  rotZ?: number
+  y?: number // высота основания над полом — для мебели, стоящей на другой мебели
 }
 
 export type Point = { x: number; y: number }

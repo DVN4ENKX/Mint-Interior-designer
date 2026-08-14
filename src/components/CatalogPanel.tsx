@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { useEffect, useMemo, useState } from 'react'
 import { useGLTF } from '@react-three/drei'
 import { CATALOG, CATEGORIES } from '../data/catalog'
@@ -82,9 +83,12 @@ export default function CatalogPanel({
       setReconJob(job_id)
       setReconStatus('Генерация 3D-модели… (на CPU 1–5 минут)')
     } catch (e) {
-      setReconStatus(
-        e instanceof Error ? e.message : 'Не удалось отправить фото на сервер',
-      )
+      const raw = e instanceof Error ? e.message : ''
+      const msg = /failed to fetch|networkerror|load failed|net::err_/i.test(raw)
+        ? 'Сервис 3D-реконструкции недоступен. Проверьте, что запущен Docker '
+          + '(docker compose up -d) и обновите страницу (Ctrl+Shift+R).'
+        : raw || 'Не удалось отправить фото на сервер'
+      setReconStatus(msg)
       setReconBusy(false)
     }
   }
@@ -234,11 +238,12 @@ export default function CatalogPanel({
         </div>
       </div>
 
-      {reconOpen && (
-        <>
-          <div className="modal fade show d-block" tabIndex={-1} role="dialog">
-            <div className="modal-dialog">
-              <div className="modal-content">
+      {reconOpen &&
+        createPortal(
+          <>
+            <div className="modal fade show d-block" tabIndex={-1} role="dialog">
+              <div className="modal-dialog">
+                <div className="modal-content">
                 <div className="modal-header">
                   <h5 className="modal-title">📷 3D-модель из фото</h5>
                   <button
@@ -309,9 +314,10 @@ export default function CatalogPanel({
               </div>
             </div>
           </div>
-          <div className="modal-backdrop fade show" onClick={closeReconstruct} />
-        </>
-      )}
+            <div className="modal-backdrop fade show" onClick={closeReconstruct} />
+          </>,
+          document.body,
+        )}
     </aside>
   )
 }

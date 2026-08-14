@@ -65,8 +65,10 @@ room-planner/
 │   ├── triposr/               # исходники TripoSR (git clone, без .git)
 │   ├── requirements.txt
 │   └── .venv/                 # создаётся при установке (не в git)
-├── docker-compose.yml         # Postgres + веб (nginx)
-├── Dockerfile                 # двухступенчатая сборка (node → nginx)
+├── docker-compose.yml         # весь стек: db + server + reconstructor + planner
+├── Dockerfile                 # фронтенд: двухступенчатая сборка (node → nginx)
+├── server/Dockerfile          # API-сервер
+├── reconstructor/Dockerfile   # TripoSR-сервис (Python, CPU)
 ├── nginx.conf
 └── .dockerignore
 ```
@@ -117,15 +119,24 @@ DATABASE_URL=postgres://planner:planner@localhost:5432/planner
 JWT_SECRET=смените-меня-в-продакшене
 ```
 
-## Docker (локальный «продакшен»)
+## Docker (весь стек)
 
 ```bash
-docker compose up --build -d   # веб на http://localhost:8080, БД на :5432
-docker compose logs -f
-docker compose down
+# сборка образов + запуск
+docker compose up --build -d
+# веб → http://localhost:8080 (nginx раздаёт статику и проксирует API),
+# БД → localhost:5432, API → localhost:8787, реконструктор → localhost:8788
+# (порты 8787/8788 опубликованы, чтобы dev-режим фронтенда мог работать
+# прямо против контейнеров)
+
+docker compose logs -f          # логи всех сервисов
+docker compose down             # остановить (тома сохраняются)
+docker compose down -v          # остановить и стереть БД + кэш весов
 ```
 
-> API-сервер в dev-режиме запускается через `node` (см. выше). Контейнеризация сервера — следующий шаг дорожной карты.
+Состав: `db` (Postgres 16) → `server` (Express API) + `reconstructor` (TripoSR, CPU) → `planner` (nginx: статика + `/api` → server, `/api/reconstruct` → reconstructor).
+
+Первая генерация «3D из фото» скачивает веса TripoSR (~700 МБ) и u2net (~170 МБ) в том `recon_cache` — после этого перезапуски контейнеров веса не качают, сама генерация занимает ~20–60 с на CPU. `JWT_SECRET` задаётся переменной окружения хоста (дефолт — `dev-secret-change-me`).
 
 ## API
 
@@ -203,8 +214,7 @@ Python-сервис в `reconstructor/` генерирует 3D-модель и�
 ## Известные ограничения прототипа
 
 - Автосохранение в localStorage ограничено ~5 МБ — очень тяжёлые фото подложки могут не поместиться (blob-части моделей и подложек лежат в IndexedDB, который объёмнее).
-- API-сервер не контейнеризован: dev-режим запускается через `node` (см. «Быстрый старт»).
-- Сервис реконструкции TripoSR работает на CPU (без GPU): генерация одной модели занимает ~0.5–5 минут.
+- Сервис реконструкции TripoSR работает на CPU (без GPU): генерация одной модели занимает ~20–60 с после первичной загрузки весов.
 
 ## Дорожная карта
 
@@ -213,7 +223,7 @@ Python-сервис в `reconstructor/` генерирует 3D-модель и�
 - [x] Категории каталога, корзина, цвета стен
 - [x] Коллизии мебели при перетаскивании
 - [x] AI «фото → 3D» (TripoSR) с ручной калибровкой габаритов по высоте
-- [ ] Контейнеризация API и сервиса реконструкции, полный стек в docker-compose
+- [x] Контейнеризация API и сервиса реконструкции, полный стек в docker-compose
 - [ ] AR-просмотр (WebXR / Quick Look)
 - [ ] Партнёрские интеграции мебельных магазинов («купить этот диван»)
 

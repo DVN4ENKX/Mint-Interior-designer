@@ -1,7 +1,7 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
-import { Stage, Layer, Line, Circle, Text, Image as KonvaImage, Rect, Arc } from 'react-konva'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Stage, Layer, Group, Line, Circle, Text, Image as KonvaImage, Rect, Arc } from 'react-konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
-import { usePlanStore } from '../store'
+import { beginDrag, endDrag, usePlanStore } from '../store'
 import { S } from '../lib/plan'
 import type { Opening, Point, Tool, Wall } from '../types'
 import {
@@ -11,7 +11,7 @@ import {
   wallLen,
   wallSolidParts,
 } from '../lib/openings'
-import { collidesAt } from '../lib/collision'
+import { collidesWalls } from '../lib/collision'
 
 const snap = (v: number) => Math.round(v * 10) / 10
 const snapP = (p: Point): Point => ({ x: snap(p.x), y: snap(p.y) })
@@ -85,17 +85,26 @@ export default function PlanPanel({
   const selectedPlacedId = usePlanStore((s) => s.selectedPlacedId)
   const selectPlaced = usePlanStore((s) => s.selectPlaced)
 
-  // размер холста по контейнеру
+  // размер холста по контейнеру: замер сразу (до первого кадра), затем ResizeObserver
+  // и страховочный слушатель window.resize — чтобы холст никогда не оставался на дефолте
   const boxRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 600, h: 500 })
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = boxRef.current
     if (!el) return
-    const ro = new ResizeObserver(() =>
-      setSize({ w: el.clientWidth, h: el.clientHeight }),
-    )
+    const measure = () => {
+      const w = el.clientWidth
+      const h = el.clientHeight
+      setSize((s) => (s.w === w && s.h === h ? s : { w, h }))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
     ro.observe(el)
-    return () => ro.disconnect()
+    window.addEventListener('resize', measure)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', measure)
+    }
   }, [])
 
   // «живое» состояние редактора — в store оно никому больше не нужно
@@ -143,9 +152,53 @@ export default function PlanPanel({
     return () => window.removeEventListener('keydown', onKey)
   }, [selectedWallId, selectedOpeningId, selectedPlacedId, removeWall, removeOpening, removeFromRoom, selectWall, selectOpening, selectPlaced])
 
+  // границы чертежа (стены + мебель): план подстраивается под реальный разброс координат,
+  // чтобы отрицательные координаты не обрезались и не оставалось больших пустых полей
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+  for (const w of walls) {
+    for (const p of [w.a, w.b]) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x)
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y)
+    }
+  }
+  for (const p of placed) {
+    minX = Math.min(minX, p.pos[0]); maxX = Math.max(maxX, p.pos[0])
+    minY = Math.min(minY, p.pos[1]); maxY = Math.max(maxY, p.pos[1])
+  }
+  if (!isFinite(minX)) { minX = 0; maxX = 0; minY = 0; maxY = 0 }
+
+  // сетка с шагом 0.5 м в метровой системе координат
+  const gx0 = Math.floor(minX * 2) / 2
+  const gy0 = Math.floor(minY * 2) / 2
+  const gx1 = maxX + 1.5
+  const gy1 = maxY + 1.5
+
+  // размер чертежа в пикселях — от фактических границ сетки, чтобы отступ
+  // слева/сверху действовал и для сетки, и для стен (линии сетки не срезаются)
+  const spanW = Math.max(1, (gx1 - gx0) * S)
+  const spanH = Math.max(1, (gy1 - gy0) * S)
+  // отступ сетки от краёв панели (слева/сверху всегда, и симметрично справа/снизу)
+  const PAD = 24
+  // план целиком влезает в панель: уменьшаем масштаб, если не помещается, и центрируем
+  const fit = Math.min((size.w - PAD * 2) / spanW, (size.h - PAD * 2) / spanH, 1)
+  const offsetX = PAD + Math.max(0, (size.w - PAD * 2 - spanW * fit) / 2)
+  const offsetY = PAD + Math.max(0, (size.h - PAD * 2 - spanH * fit) / 2)
+
+  const grid: React.ReactNode[] = []
+  for (let x = gx0; x <= gx1; x += 0.5)
+    grid.push(<Line key={`v${x}`} points={[x * S, gy0 * S, x * S, gy1 * S]} stroke="rgba(255,255,255,0.06)" listening={false} />)
+  for (let y = gy0; y <= gy1; y += 0.5)
+    grid.push(<Line key={`h${y}`} points={[gx0 * S, y * S, gx1 * S, y * S]} stroke="rgba(255,255,255,0.06)" listening={false} />)
+
   const toMeters = (e: StageEvt): Point => {
     const pos = e.target.getStage()?.getPointerPosition()
-    return pos ? { x: pos.x / S, y: pos.y / S } : { x: 0, y: 0 }
+    // клик приходит в экранных пикселях Stage; мировая координата с учётом подгонки и смещения
+    return pos
+      ? {
+          x: (pos.x - offsetX) / (S * fit) + gx0,
+          y: (pos.y - offsetY) / (S * fit) + gy0,
+        }
+      : { x: 0, y: 0 }
   }
 
   const onClick = (e: StageEvt) => {
@@ -198,25 +251,6 @@ export default function PlanPanel({
   const selectedOpening = openings.find((o) => o.id === selectedOpeningId) ?? null
   const imageScale = underlay ? underlay.metersPerPx * S : 1
   const preview = draft && cursor ? snapAxis(draft, cursor) : null
-
-  // сетка с шагом 0.5 м; полотно больше вьюпорта, если контент не влезает
-  let maxX = 0, maxY = 0
-  for (const w of walls) {
-    maxX = Math.max(maxX, w.a.x, w.b.x)
-    maxY = Math.max(maxY, w.a.y, w.b.y)
-  }
-  for (const p of placed) {
-    maxX = Math.max(maxX, p.pos[0])
-    maxY = Math.max(maxY, p.pos[1])
-  }
-  const contentW = Math.max(size.w, Math.ceil((maxX + 1.5) * S))
-  const contentH = Math.max(size.h, Math.ceil((maxY + 1.5) * S))
-
-  const grid: React.ReactNode[] = []
-  for (let x = 0; x <= contentW; x += 0.5 * S)
-    grid.push(<Line key={`v${x}`} points={[x, 0, x, contentH]} stroke="rgba(255,255,255,0.06)" listening={false} />)
-  for (let y = 0; y <= contentH; y += 0.5 * S)
-    grid.push(<Line key={`h${y}`} points={[0, y, contentW, y]} stroke="rgba(255,255,255,0.06)" listening={false} />)
 
   // символ проёма: дверь — дуга + полотно, окно — двойная линия
   const openingSymbol = (w: Wall, o: Opening) => {
@@ -333,7 +367,9 @@ export default function PlanPanel({
           stroke="#10B981"
           strokeWidth={2}
           draggable
+          onDragStart={beginDrag}
           onDragMove={moveTo}
+          onDragEnd={endDrag}
         />
         <Circle
           x={e0.x * S}
@@ -343,7 +379,9 @@ export default function PlanPanel({
           stroke="#10B981"
           strokeWidth={2}
           draggable
+          onDragStart={beginDrag}
           onDragMove={(ev) => resizeTo(ev, t1f)}
+          onDragEnd={endDrag}
         />
         <Circle
           x={e1.x * S}
@@ -353,7 +391,9 @@ export default function PlanPanel({
           stroke="#10B981"
           strokeWidth={2}
           draggable
+          onDragStart={beginDrag}
           onDragMove={(ev) => resizeTo(ev, t0f)}
+          onDragEnd={endDrag}
         />
       </Fragment>
     )
@@ -388,10 +428,9 @@ export default function PlanPanel({
             const px = snap(e.target.x() / S)
             const py = snap(e.target.y() / S)
             const self = placed.find((x) => x.uid === p.uid)
-            const others = placed.filter((x) => x.uid !== p.uid)
+            // предметы можно ставить друг на друга — ограничиваем только стенами
             const rejected =
-              self &&
-              collidesAt(px, py, self.item.size, self.rotY, p.uid, others)
+              self && collidesWalls(px, py, self.item.size, self.rotY, walls, openings)
             if (rejected) {
               e.target.x(p.pos[0] * S)
               e.target.y(p.pos[1] * S)
@@ -475,21 +514,30 @@ export default function PlanPanel({
         </div>
       )}
 
-      <div className="plan-canvas" ref={boxRef}>
+      <div
+        className="plan-canvas"
+        ref={boxRef}
+        onContextMenu={(e) => e.preventDefault()}
+      >
         <Stage
-          width={contentW}
-          height={contentH}
+          width={size.w}
+          height={size.h}
           onClick={onClick}
           onDblClick={() => setDraft(null)}
           onMouseMove={(e) => setCursor(toMeters(e))}
           onMouseLeave={() => setCursor(null)}
         >
           <Layer>
-            {grid}
+            {/* чертёж рисуется в метровой системе координат, а на экран его сдвигает и
+                масштабирует внешняя группа: план целиком влезает в панель и не обрезается
+                при отрицательных координатах */}
+            <Group position={[offsetX, offsetY]} scaleX={fit} scaleY={fit}>
+            <Group position={[-gx0 * S, -gy0 * S]}>
+              {grid}
 
-            {img && underlay && (
-              <KonvaImage image={img} scaleX={imageScale} scaleY={imageScale} opacity={0.6} />
-            )}
+              {img && underlay && (
+                <KonvaImage image={img} scaleX={imageScale} scaleY={imageScale} opacity={0.6} />
+              )}
 
             {/* стены — сегментами, разрыв в местах дверей и окон */}
             {walls.map((w) => {
@@ -592,9 +640,11 @@ export default function PlanPanel({
                   stroke="#10B981"
                   strokeWidth={2}
                   draggable
+                  onDragStart={beginDrag}
                   onDragMove={(e) =>
                     updateWallEnd(selected.id, end, snapP(toMeters(e)))
                   }
+                  onDragEnd={endDrag}
                 />
               ))}
 
@@ -608,6 +658,8 @@ export default function PlanPanel({
 
             {/* схематичная мебель (вид сверху) */}
             {furniture}
+            </Group>
+            </Group>
           </Layer>
         </Stage>
       </div>

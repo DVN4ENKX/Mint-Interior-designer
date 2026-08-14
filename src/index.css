@@ -305,6 +305,27 @@ body {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
+/* панель управления выбранным предметом в 3D-вьюпорте */
+.selection-controls {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 72%;
+  background: rgba(18, 14, 20, 0.55);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  backdrop-filter: blur(14px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: rgba(234, 230, 238, 0.9);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
 /* модалка аутентификации */
 .modal-content {
   background: rgba(30, 24, 32, 0.82);
@@ -335,6 +356,21 @@ body {
 .item-card:hover { background: rgba(255, 255, 255, 0.08); }
 .item-card:hover { border-color: rgba(var(--mint-rgb), 0.4); }
 
+/* карточки шаблонов комнат и квартир */
+.template-card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: inherit;
+  text-align: left;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.template-card:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(var(--mint-rgb), 0.4);
+}
+
 .catalog-panel {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
@@ -352,6 +388,7 @@ body {
   .card { background: rgba(30, 24, 32, 0.96); }
   .toolbar,
   .cloudbar { background: var(--night-soft); }
-  .hud { background: rgba(18, 14, 20, 0.92); }
+  .hud,
+  .selection-controls { background: rgba(18, 14, 20, 0.92); }
   .modal-content { background: var(--night-soft); }
 }
